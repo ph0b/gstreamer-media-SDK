@@ -570,10 +570,18 @@ gst_mfx_decoder_prepare (GstMfxDecoder * decoder)
   gst_mfx_task_set_video_params (decoder->decode, &decoder->params);
   decoder->configured = TRUE;
 
-  memset(&decoder->bs, 0, sizeof(mfxBitstream));
+  memset (&decoder->bs, 0, sizeof (mfxBitstream));
   if (MFX_CODEC_VC1 == decoder->profile.codec
       && MFX_PROFILE_VC1_ADVANCED == decoder->profile.profile)
     decoder->bs.DataOffset = 1;
+
+  if (MFX_CODEC_VP8 == decoder->profile.codec
+    || MFX_CODEC_JPEG == decoder->profile.codec
+#if MSDK_CHECK_VERSION(1,19)
+    || MFX_CODEC_VP9 == decoder->profile.codec
+#endif
+    )
+    decoder->bs.DataFlag |= MFX_BITSTREAM_COMPLETE_FRAME;
 
 done:
   if (cur_frame)
@@ -734,7 +742,13 @@ gst_mfx_decoder_decode (GstMfxDecoder * decoder, GstVideoCodecFrame * frame)
       }
     }
 
-    if (minfo.size) {
+    if (MFX_BITSTREAM_COMPLETE_FRAME & decoder->bs.DataFlag) {
+      /* if we're feeding up the decoder with complete frames,
+       * we can avoid copying the bistream.
+       */
+      decoder->bs.DataLength = decoder->bs.MaxLength = minfo.size;
+      decoder->bs.Data = minfo.data;
+    } else {
       decoder->bitstream = g_byte_array_append (decoder->bitstream,
         minfo.data, minfo.size);
       decoder->bs.DataLength += minfo.size;
@@ -866,7 +880,7 @@ gst_mfx_decoder_decode (GstMfxDecoder * decoder, GstVideoCodecFrame * frame)
 
         decoder->has_ready_frames = TRUE;
         decoder->bitstream = g_byte_array_remove_range (decoder->bitstream, 0,
-          decoder->bs.DataOffset);
+          min (decoder->bs.DataOffset, decoder->bitstream->len));
         decoder->bs.DataOffset = 0;
 
         ret = GST_MFX_DECODER_STATUS_SUCCESS;
